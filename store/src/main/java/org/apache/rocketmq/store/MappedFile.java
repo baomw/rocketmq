@@ -42,26 +42,66 @@ import org.apache.rocketmq.store.util.LibC;
 import sun.nio.ch.DirectBuffer;
 
 public class MappedFile extends ReferenceResource {
+    /**
+     * OSpage大小，4K
+     */
     public static final int OS_PAGE_SIZE = 1024 * 4;
     protected static final InternalLogger log = InternalLoggerFactory.getLogger(LoggerName.STORE_LOGGER_NAME);
 
+    /**
+     * 所有MappedFile实例已使用字节总数
+     */
     private static final AtomicLong TOTAL_MAPPED_VIRTUAL_MEMORY = new AtomicLong(0);
 
+    /**
+     * MappedFile个数
+     */
     private static final AtomicInteger TOTAL_MAPPED_FILES = new AtomicInteger(0);
+    /**
+     * 当前MappedFile对象当前写的位置
+     */
     protected final AtomicInteger wrotePosition = new AtomicInteger(0);
+    /**
+     * commitlog记录的消息所在的位置，根据执行顺序，应该是先记录日志，后做刷盘操作，那么理论上大于等于wrotePosition
+     */
     protected final AtomicInteger committedPosition = new AtomicInteger(0);
+    /**
+     * 当前MappedFile刷到磁盘的位置
+     */
     private final AtomicInteger flushedPosition = new AtomicInteger(0);
+    /**
+     * 感觉是物理文件大小
+     */
     protected int fileSize;
+    /**
+     * ？
+     */
     protected FileChannel fileChannel;
     /**
      * Message will put to here first, and then reput to FileChannel if writeBuffer is not null.
+     * ？
      */
     protected ByteBuffer writeBuffer = null;
     protected TransientStorePool transientStorePool = null;
+    /**
+     * 文件名称  在ensureDirOK 方法中，保障了文件的可用性
+     */
     private String fileName;
+    /**
+     * 消息文件当前所在的位置
+     */
     private long fileFromOffset;
+    /**
+     * 文件对象
+     */
     private File file;
+    /**
+     * 不知道干嘛的？
+     */
     private MappedByteBuffer mappedByteBuffer;
+    /**
+     * 最后一次存储的时间戳
+     */
     private volatile long storeTimestamp = 0;
     private boolean firstCreateInQueue = false;
 
@@ -196,12 +236,21 @@ public class MappedFile extends ReferenceResource {
         return appendMessagesInner(messageExtBatch, cb);
     }
 
+    /**
+     * 消息插入处理
+     * @param messageExt
+     * @param cb
+     * @return
+     */
     public AppendMessageResult appendMessagesInner(final MessageExt messageExt, final AppendMessageCallback cb) {
         assert messageExt != null;
         assert cb != null;
 
         int currentPos = this.wrotePosition.get();
 
+        /**
+         * 先计算文件磁盘存储是否满足大小，如果满足则进行刷盘操作，否则报一个为止错误
+         */
         if (currentPos < this.fileSize) {
             ByteBuffer byteBuffer = writeBuffer != null ? writeBuffer.slice() : this.mappedByteBuffer.slice();
             byteBuffer.position(currentPos);

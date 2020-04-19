@@ -62,6 +62,10 @@ public class CommitLog {
 
     private final AppendMessageCallback appendMessageCallback;
     private final ThreadLocal<MessageExtBatchEncoder> batchEncoderThreadLocal;
+
+    /**
+     * queue 列表信息
+     */
     protected HashMap<String/* topic-queueid */, Long/* offset */> topicQueueTable = new HashMap<String, Long>(1024);
     protected volatile long confirmOffset = -1L;
 
@@ -1520,6 +1524,14 @@ public class CommitLog {
             return msgStoreItemMemory;
         }
 
+        /**
+         *
+         * @param fileFromOffset  写入文件起始位置，前面已做相关计算
+         * @param byteBuffer 需要写入文件流
+         * @param maxBlank 消息大小（相对大小） 基于fileSize - currentPos计算
+         * @param msgInner 消息MessageExt对象
+         * @return
+         */
         public AppendMessageResult doAppend(final long fileFromOffset, final ByteBuffer byteBuffer, final int maxBlank,
             final MessageExtBrokerInner msgInner) {
             // STORETIMESTAMP + STOREHOSTADDRESS + OFFSET <br>
@@ -1529,6 +1541,7 @@ public class CommitLog {
 
             int sysflag = msgInner.getSysFlag();
 
+            // ? 探讨一下
             int bornHostLength = (sysflag & MessageSysFlag.BORNHOST_V6_FLAG) == 0 ? 4 + 4 : 16 + 4;
             int storeHostLength = (sysflag & MessageSysFlag.STOREHOSTADDRESS_V6_FLAG) == 0 ? 4 + 4 : 16 + 4;
             ByteBuffer bornHostHolder = ByteBuffer.allocate(bornHostLength);
@@ -1547,7 +1560,10 @@ public class CommitLog {
             keyBuilder.append(msgInner.getTopic());
             keyBuilder.append('-');
             keyBuilder.append(msgInner.getQueueId());
+
+            // messagekey   topic-queueId
             String key = keyBuilder.toString();
+            //1，干嘛的？
             Long queueOffset = CommitLog.this.topicQueueTable.get(key);
             if (null == queueOffset) {
                 queueOffset = 0L;
@@ -1559,6 +1575,9 @@ public class CommitLog {
             switch (tranType) {
                 // Prepared and Rollback message is not consumed, will not enter the
                 // consumer queuec
+                /**
+                 * 这两种消息应该是不需要被消费的，直接将queueOffset置成0
+                 */
                 case MessageSysFlag.TRANSACTION_PREPARED_TYPE:
                 case MessageSysFlag.TRANSACTION_ROLLBACK_TYPE:
                     queueOffset = 0L;
@@ -1571,11 +1590,23 @@ public class CommitLog {
 
             /**
              * Serialize message
+             * 默认以  utf-8  的编码格式序列化消息
+             * 注意编码格式，后续出现消息乱码问题好知道怎么排查
+             *
              */
             final byte[] propertiesData =
                 msgInner.getPropertiesString() == null ? null : msgInner.getPropertiesString().getBytes(MessageDecoder.CHARSET_UTF8);
 
+            /**
+             * 计算单挑消息大小
+             */
             final int propertiesLength = propertiesData == null ? 0 : propertiesData.length;
+
+            /**
+             * 32767 / 1024 = 32  kb  才32kb？  还是这个propertiesData并非是真正的消息大小
+             *
+             * 下面有一个  msgLen 可知propertiesData并非是真实的消息实体
+             */
 
             if (propertiesLength > Short.MAX_VALUE) {
                 log.warn("putMessage message properties length too long. length={}", propertiesData.length);
@@ -1590,6 +1621,11 @@ public class CommitLog {
             final int msgLen = calMsgLength(msgInner.getSysFlag(), bodyLength, topicLength, propertiesLength);
 
             // Exceeds the maximum message
+            /**
+             *  maxMessageSize 变量，可以支持自己配置，如果当前消息体大于配置的最大消息大小，
+             *  则返回message size exceeded, msg total size:  错误，以后看到类似错误可知道错误原因
+             */
+
             if (msgLen > this.maxMessageSize) {
                 CommitLog.log.warn("message size exceeded, msg total size: " + msgLen + ", msg body size: " + bodyLength
                     + ", maxMessageSize: " + this.maxMessageSize);
@@ -1611,6 +1647,9 @@ public class CommitLog {
                     queueOffset, CommitLog.this.defaultMessageStore.now() - beginTimeMills);
             }
 
+            /**
+             * 填充msgStoreItemMemory属性
+             */
             // Initialization of storage space
             this.resetByteBuffer(msgStoreItemMemory, msgLen);
             // 1 TOTALSIZE
@@ -1655,6 +1694,7 @@ public class CommitLog {
             if (propertiesLength > 0)
                 this.msgStoreItemMemory.put(propertiesData);
 
+            //生成当前时间搓
             final long beginTimeMills = CommitLog.this.defaultMessageStore.now();
             // Write messages to the queue buffer
             byteBuffer.put(this.msgStoreItemMemory.array(), 0, msgLen);
